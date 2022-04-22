@@ -227,7 +227,6 @@ fn process_collisions_system(
             let mut bounce_off_paddle = || {
                 ball_velocity.0.x = -ball_velocity.0.x;
                 let dst_from_center = ball_transform.translation.y - transform.translation.y;
-                println!("Dist from center: {:?}", dst_from_center);
                 ball_velocity.0.y = dst_from_center * BOUNCE_ANGLE_STEEPNESS;
             };
 
