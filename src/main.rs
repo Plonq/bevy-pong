@@ -15,7 +15,7 @@ const COURT_HEIGHT: f32 = 600.0;
 const PADDLE_SIZE: Vec2 = const_vec2!([6., 46.]);
 const BALL_SIZE: Vec2 = const_vec2!([8., 8.]);
 
-const BOUNCE_ANGLE_STEEPNESS: f32 = 25.0;
+const BOUNCE_ANGLE_STEEPNESS: f32 = 22.0;
 
 
 fn main() {
