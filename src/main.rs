@@ -29,7 +29,10 @@ fn main() {
         })
         .add_plugins(DefaultPlugins)
         .insert_resource(ClearColor(Color::BLACK))
+        .insert_resource(PlayerTurn(true))
+        .insert_resource(BallSpawnTimer(Timer::from_seconds(0.5, false)))
         .add_startup_system(setup)
+        .add_system(ball_spawn_system)
         .add_system_set(
             SystemSet::new()
                 .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
@@ -40,6 +43,12 @@ fn main() {
         )
         .run();
 }
+
+
+struct PlayerTurn(bool);
+
+
+struct BallSpawnTimer(Timer);
 
 
 #[derive(Component)]
@@ -119,24 +128,6 @@ fn setup(mut windows: ResMut<Windows>, mut commands: Commands) {
             },
             ..default()
         });
-
-    // Ball
-    commands
-        .spawn()
-        .insert(Ball)
-        .insert(Velocity(Vec2::new(-300., 0.)))
-        .insert_bundle(SpriteBundle {
-            transform: Transform {
-                translation: Vec3::new(0., 0., 0.0),
-                ..default()
-            },
-            sprite: Sprite {
-                color: Color::WHITE,
-                custom_size: Some(BALL_SIZE),
-                ..default()
-            },
-            ..default()
-        });
 }
 
 
@@ -171,6 +162,7 @@ fn apply_velocity_system(mut query: Query<(&mut Transform, &Velocity)>) {
 fn process_collisions_system(
     mut ball_query: Query<(Entity, &mut Velocity, &Transform, &Sprite), With<Ball>>,
     collider_query: Query<(&Transform, &Sprite), With<Collider>>,
+    mut ball_spawn_timer: ResMut<BallSpawnTimer>,
     mut commands: Commands,
 ) {
     if let Ok((ball, mut ball_velocity, ball_transform, ball_sprite)) = ball_query.get_single_mut() {
@@ -209,10 +201,12 @@ fn process_collisions_system(
         if left_gutter_collision.is_some() {
             println!("Opponent scored!");
             commands.entity(ball).despawn();
+            ball_spawn_timer.0.reset();
         }
         if right_gutter_collision.is_some() {
             println!("Player scored!");
             commands.entity(ball).despawn();
+            ball_spawn_timer.0.reset();
         }
 
         for (transform, sprite) in collider_query.iter() {
@@ -239,5 +233,39 @@ fn process_collisions_system(
                 }
             }
         }
+    }
+}
+
+
+fn ball_spawn_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut ball_spawn_timer: ResMut<BallSpawnTimer>,
+    mut player_turn: ResMut<PlayerTurn>,
+) {
+    if ball_spawn_timer.0.tick(time.delta()).just_finished() {
+        // Determine which direction ball starts
+        let dir_multiplier = if player_turn.0 { -1.0 } else { 1.0 };
+
+        // Spawn ball
+        commands
+            .spawn()
+            .insert(Ball)
+            .insert(Velocity(Vec2::new(300. * dir_multiplier, 0.)))
+            .insert_bundle(SpriteBundle {
+                transform: Transform {
+                    translation: Vec3::new(0., 0., 0.0),
+                    ..default()
+                },
+                sprite: Sprite {
+                    color: Color::WHITE,
+                    custom_size: Some(BALL_SIZE),
+                    ..default()
+                },
+                ..default()
+            });
+
+        // Switch turns
+        player_turn.0 = !player_turn.0;
     }
 }
