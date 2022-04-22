@@ -36,9 +36,15 @@ fn main() {
         .add_system_set(
             SystemSet::new()
                 .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
-                .with_system(process_collisions_system)
-                .with_system(player_controller_system.before(process_collisions_system))
-                .with_system(apply_velocity_system.before(process_collisions_system))
+                .with_system(player_controller_system.before(apply_velocity_system))
+                .with_system(opponent_controller_system.before(apply_velocity_system))
+                .with_system(apply_velocity_system)
+                .with_system(
+                    process_collisions_system
+                        .after(player_controller_system)
+                        .after(opponent_controller_system)
+                        .after(apply_velocity_system)
+                )
             // .with_system(play_collision_sound.after(check_for_collisions))
         )
         .run();
@@ -116,6 +122,7 @@ fn setup(mut windows: ResMut<Windows>, mut commands: Commands) {
         .spawn()
         .insert(Opponent)
         .insert(Collider)
+        .insert(Velocity(Vec2::ZERO))
         .insert_bundle(SpriteBundle {
             transform: Transform {
                 translation: Vec3::new(COURT_WIDTH * 0.5 - 26., 0., 0.0),
@@ -267,5 +274,25 @@ fn ball_spawn_system(
 
         // Switch turns
         player_turn.0 = !player_turn.0;
+    }
+}
+
+
+fn opponent_controller_system(
+    ball_query: Query<(&Transform, &Velocity), With<Ball>>,
+    mut opponent_query: Query<(&Opponent, &Transform, &mut Velocity), Without<Ball>>,
+) {
+    let (_, opponent_transform, mut opponent_velocity) = opponent_query.single_mut();
+
+    if let Ok((ball_transform, ball_velocity)) = ball_query.get_single() {
+        if ball_velocity.0.x > 0.0 {
+            opponent_velocity.0.y = (
+                (ball_transform.translation.y - opponent_transform.translation.y) * 10.
+            ).clamp(-400., 400.);
+        } else {
+            opponent_velocity.0.y = 0.;
+        }
+    } else {
+        opponent_velocity.0.y = 0.;
     }
 }
