@@ -30,9 +30,11 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(PlayerTurn(true))
+        .insert_resource(Scoreboard { player: 0, opponent: 0 })
         .insert_resource(BallSpawnTimer(Timer::from_seconds(0.5, false)))
         .add_startup_system(setup)
         .add_system(ball_spawn_system)
+        .add_system(scoreboard_update_system)
         .add_system_set(
             SystemSet::new()
                 .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
@@ -57,6 +59,12 @@ struct PlayerTurn(bool);
 struct BallSpawnTimer(Timer);
 
 
+struct Scoreboard {
+    player: u16,
+    opponent: u16,
+}
+
+
 #[derive(Component)]
 struct Player;
 
@@ -77,7 +85,11 @@ struct Velocity(Vec2);
 struct Collider;
 
 
-fn setup(mut windows: ResMut<Windows>, mut commands: Commands) {
+#[derive(Component)]
+struct ScoreText;
+
+
+fn setup(mut windows: ResMut<Windows>, mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn_bundle(OrthographicCameraBundle::new_2d());
 
     // Grab cursor
@@ -135,6 +147,65 @@ fn setup(mut windows: ResMut<Windows>, mut commands: Commands) {
             },
             ..default()
         });
+
+    // UI
+    commands.spawn_bundle(UiCameraBundle::default());
+    // Player Score
+    commands
+        .spawn_bundle(NodeBundle {
+            style: Style {
+                size: Size::new(Val::Percent(100.), Val::Percent(100.)),
+                position_type: PositionType::Absolute,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::FlexEnd,
+                ..default()
+            },
+            color: Color::NONE.into(),
+            ..default()
+        })
+        .with_children(|parent| {
+            parent.spawn_bundle(TextBundle {
+                style: Style {
+                    margin: Rect {
+                        top: Val::Percent(7.),
+                        ..default()
+                    },
+                    ..default()
+                },
+                text: Text {
+                    sections: vec![
+                        TextSection {
+                            value: "0".to_string(),
+                            style: TextStyle {
+                                font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+                                font_size: 60.0,
+                                color: Color::WHITE,
+                            },
+                        },
+                        // Spacer
+                        TextSection {
+                            value: "               ".to_string(),
+                            style: TextStyle {
+                                font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+                                font_size: 60.0,
+                                color: Color::WHITE,
+                            },
+                        },
+                        TextSection {
+                            value: "0".to_string(),
+                            style: TextStyle {
+                                font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+                                font_size: 60.0,
+                                color: Color::WHITE,
+                            },
+                        },
+                    ],
+                    ..default()
+                },
+                ..default()
+            })
+                .insert(ScoreText);
+        });
 }
 
 
@@ -170,6 +241,7 @@ fn process_collisions_system(
     mut ball_query: Query<(Entity, &mut Velocity, &Transform, &Sprite), With<Ball>>,
     collider_query: Query<(&Transform, &Sprite), With<Collider>>,
     mut ball_spawn_timer: ResMut<BallSpawnTimer>,
+    mut scoreboard: ResMut<Scoreboard>,
     mut commands: Commands,
 ) {
     if let Ok((ball, mut ball_velocity, ball_transform, ball_sprite)) = ball_query.get_single_mut() {
@@ -209,11 +281,13 @@ fn process_collisions_system(
             println!("Opponent scored!");
             commands.entity(ball).despawn();
             ball_spawn_timer.0.reset();
+            scoreboard.opponent += 1;
         }
         if right_gutter_collision.is_some() {
             println!("Player scored!");
             commands.entity(ball).despawn();
             ball_spawn_timer.0.reset();
+            scoreboard.player += 1;
         }
 
         for (transform, sprite) in collider_query.iter() {
@@ -295,4 +369,15 @@ fn opponent_controller_system(
     } else {
         opponent_velocity.0.y = 0.;
     }
+}
+
+
+fn scoreboard_update_system(
+    scoreboard: Res<Scoreboard>,
+    mut score_query: Query<&mut Text, With<ScoreText>>,
+) {
+    let mut score_text = score_query.single_mut();
+
+    score_text.sections[0].value = format!("{}", scoreboard.player);
+    score_text.sections[2].value = format!("{}", scoreboard.opponent);
 }
