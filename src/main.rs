@@ -16,6 +16,7 @@ const PADDLE_SIZE: Vec2 = const_vec2!([6., 46.]);
 const BALL_SIZE: Vec2 = const_vec2!([8., 8.]);
 
 const BOUNCE_ANGLE_STEEPNESS: f32 = 22.0;
+const BALL_SPEED: f32 = 500.;
 
 
 fn main() {
@@ -363,7 +364,7 @@ fn ball_spawn_system(
         commands
             .spawn()
             .insert(Ball)
-            .insert(Velocity(Vec2::new(300. * dir_multiplier, 0.)))
+            .insert(Velocity(Vec2::new(BALL_SPEED * dir_multiplier, 0.)))
             .insert_bundle(SpriteBundle {
                 transform: Transform {
                     translation: Vec3::new(0., 0., 0.0),
