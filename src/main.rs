@@ -9,13 +9,13 @@ use bevy::sprite::collide_aabb::{collide, Collision};
 // Physics framerate
 const TIME_STEP: f32 = 1.0 / 60.0;
 
-const COURT_WIDTH: f32 = 800.0;
-const COURT_HEIGHT: f32 = 600.0;
+const WINDOW_WIDTH: f32 = 800.0;
+const WINDOW_HEIGHT: f32 = 600.0;
 
 const PADDLE_SIZE: Vec2 = const_vec2!([6., 46.]);
 const BALL_SIZE: Vec2 = const_vec2!([8., 8.]);
 
-const BOUNCE_ANGLE_STEEPNESS: f32 = 22.0;
+const BOUNCE_ANGLE_MULTIPLIER: f32 = 22.0;
 const BALL_SPEED: f32 = 500.;
 
 
@@ -23,9 +23,9 @@ fn main() {
     App::new()
         .insert_resource(WindowDescriptor {
             title: "Bevy Pong".to_string(),
-            width: COURT_WIDTH,
-            height: COURT_HEIGHT,
-            present_mode: PresentMode::Fifo,
+            width: WINDOW_WIDTH,
+            height: WINDOW_HEIGHT,
+            present_mode: PresentMode::Fifo,  // VSync
             ..default()
         })
         .add_plugins(DefaultPlugins)
@@ -35,29 +35,32 @@ fn main() {
         .insert_resource(BallSpawnTimer(Timer::from_seconds(0.5, false)))
         .add_event::<CollisionEvent>()
         .add_startup_system(setup)
-        .add_system(ball_spawn_system)
-        .add_system(scoreboard_update_system)
+        .add_system(ball_spawner)
+        .add_system(update_scoreboard)
         .add_system_set(
+                // Run physics systems (and anything that depends on physics systems) at constant FPS
             SystemSet::new()
                 .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
-                .with_system(player_controller_system.before(apply_velocity_system))
-                .with_system(opponent_controller_system.before(apply_velocity_system))
-                .with_system(apply_velocity_system)
+                .with_system(player_controller.before(apply_velocity))
+                .with_system(opponent_controller.before(apply_velocity))
+                .with_system(apply_velocity)
                 .with_system(
-                    process_collisions_system
-                        .after(player_controller_system)
-                        .after(opponent_controller_system)
-                        .after(apply_velocity_system)
+                    process_collisions
+                        .after(player_controller)
+                        .after(opponent_controller)
+                        .after(apply_velocity)
                 )
-                .with_system(collision_sound_system.after(process_collisions_system))
+                .with_system(play_sounds.after(process_collisions))
         )
         .run();
 }
 
 
+// Flag to determine which direction ball starts in
 struct PlayerTurn(bool);
 
 
+// Timer to determine time between ball spawns
 struct BallSpawnTimer(Timer);
 
 
@@ -67,26 +70,33 @@ struct Scoreboard {
 }
 
 
+// Marker component for player
 #[derive(Component)]
 struct Player;
 
 
+// Marker component for opponent
 #[derive(Component)]
 struct Opponent;
 
 
+// Marker component for ball
 #[derive(Component)]
 struct Ball;
 
 
-#[derive(Component, Debug)]
+// Track velocity of an entity
+#[derive(Component)]
 struct Velocity(Vec2);
 
 
+// Marker component for collider
+// (collisions based on sprite custom_size)
 #[derive(Component)]
 struct Collider;
 
 
+// Marker component for scoreboard text
 #[derive(Component)]
 struct ScoreText;
 
@@ -97,7 +107,7 @@ enum CollisionEvent {
 }
 
 
-struct CollisionSound(Handle<AudioSource>);
+struct HitSound(Handle<AudioSource>);
 
 
 struct GoalSound(Handle<AudioSource>);
@@ -109,24 +119,25 @@ fn setup(
     asset_server: Res<AssetServer>,
     audio: Res<Audio>,
 ) {
+    // Camera
     commands.spawn_bundle(OrthographicCameraBundle::new_2d());
 
-    // Sounds
+    // Play music and load other sounds
     audio.play_with_settings(
         asset_server.load("sounds/Music.wav"),
         PlaybackSettings::LOOP.with_volume(0.1),
     );
     let hit_sound = asset_server.load("sounds/PaddleHitSound.wav");
     let goal_sound = asset_server.load("sounds/GoalSound.wav");
-    commands.insert_resource(CollisionSound(hit_sound));
+    commands.insert_resource(HitSound(hit_sound));
     commands.insert_resource(GoalSound(goal_sound));
 
-    // Grab cursor
+    // Grab and hide cursor
     let window = windows.get_primary_mut().unwrap();
     window.set_cursor_lock_mode(true);
     window.set_cursor_visibility(false);
 
-    // Net
+    // Draw net (line in middle)
     commands.spawn_bundle(SpriteBundle {
         transform: Transform {
             translation: Vec3::ZERO,
@@ -134,20 +145,20 @@ fn setup(
         },
         sprite: Sprite {
             color: Color::rgb(0.65, 0.65, 0.65),
-            custom_size: Some(Vec2::new(3., COURT_HEIGHT)),
+            custom_size: Some(Vec2::new(3., WINDOW_HEIGHT)),
             ..default()
         },
         ..default()
     });
 
-    // Player Paddle (left)
+    // Add player Paddle (left)
     commands
         .spawn()
         .insert(Player)
         .insert(Collider)
         .insert_bundle(SpriteBundle {
             transform: Transform {
-                translation: Vec3::new(-COURT_WIDTH * 0.5 + 26., 0., 0.0),
+                translation: Vec3::new(-WINDOW_WIDTH * 0.5 + 26., 0., 0.0),
                 ..default()
             },
             sprite: Sprite {
@@ -158,7 +169,7 @@ fn setup(
             ..default()
         });
 
-    // Opponent paddle (right)
+    // Add opponent paddle (right)
     commands
         .spawn()
         .insert(Opponent)
@@ -166,7 +177,7 @@ fn setup(
         .insert(Velocity(Vec2::ZERO))
         .insert_bundle(SpriteBundle {
             transform: Transform {
-                translation: Vec3::new(COURT_WIDTH * 0.5 - 26., 0., 0.0),
+                translation: Vec3::new(WINDOW_WIDTH * 0.5 - 26., 0., 0.0),
                 ..default()
             },
             sprite: Sprite {
@@ -177,16 +188,17 @@ fn setup(
             ..default()
         });
 
-    // UI
+    // UI Camera
     commands.spawn_bundle(UiCameraBundle::default());
-    // Player Score
+
+    // Scoreboard
     commands
         .spawn_bundle(NodeBundle {
             style: Style {
                 size: Size::new(Val::Percent(100.), Val::Percent(100.)),
                 position_type: PositionType::Absolute,
                 justify_content: JustifyContent::Center,
-                align_items: AlignItems::FlexEnd,
+                align_items: AlignItems::FlexEnd,  // Coordinates are Y-up so this is at top of screen
                 ..default()
             },
             color: Color::NONE.into(),
@@ -211,7 +223,7 @@ fn setup(
                                 color: Color::WHITE,
                             },
                         },
-                        // Spacer
+                        // Spacer hack so I can update both scores with a single entity/component
                         TextSection {
                             value: "               ".to_string(),
                             style: TextStyle {
@@ -238,7 +250,8 @@ fn setup(
 }
 
 
-fn player_controller_system(
+/// Controls the player paddle with the mouse
+fn player_controller(
     mut query: Query<&mut Transform, With<Player>>,
     mut mouse_motion: EventReader<MouseMotion>,
 ) {
@@ -251,14 +264,16 @@ fn player_controller_system(
 
     let new_position = player_transform.translation.y + accumulated_delta_y;
 
-    let lower_bound = -COURT_HEIGHT * 0.5 + (PADDLE_SIZE.y * 0.5) + 5.;
-    let upper_bound = COURT_HEIGHT * 0.5 - (PADDLE_SIZE.y * 0.5) - 5.;
+    // Prevent paddle going off-screen
+    let lower_bound = -WINDOW_HEIGHT * 0.5 + (PADDLE_SIZE.y * 0.5) + 5.;
+    let upper_bound = WINDOW_HEIGHT * 0.5 - (PADDLE_SIZE.y * 0.5) - 5.;
 
     player_transform.translation.y = new_position.clamp(lower_bound, upper_bound);
 }
 
 
-fn apply_velocity_system(mut query: Query<(&mut Transform, &Velocity)>) {
+/// Generic system to apply velocity to any entity with velocity and transform components
+fn apply_velocity(mut query: Query<(&mut Transform, &Velocity)>) {
     for (mut transform, velocity) in query.iter_mut() {
         transform.translation.x += velocity.0.x * TIME_STEP;
         transform.translation.y += velocity.0.y * TIME_STEP;
@@ -266,7 +281,11 @@ fn apply_velocity_system(mut query: Query<(&mut Transform, &Velocity)>) {
 }
 
 
-fn process_collisions_system(
+/// Detect ball collisions and act accordingly
+///  - Bounce off walls and paddles
+///  - Increment scores if hit goals
+///  - Play sounds
+fn process_collisions(
     mut ball_query: Query<(Entity, &mut Velocity, &Transform, &Sprite), With<Ball>>,
     collider_query: Query<(&Transform, &Sprite), With<Collider>>,
     mut ball_spawn_timer: ResMut<BallSpawnTimer>,
@@ -281,14 +300,14 @@ fn process_collisions_system(
         let top_wall_collision = collide(
             ball_transform.translation,
             ball_size,
-            Vec3::new(0., -COURT_HEIGHT * 0.5 - 20., 0.),
-            Vec2::new(COURT_WIDTH, 40.),
+            Vec3::new(0., -WINDOW_HEIGHT * 0.5 - 20., 0.),
+            Vec2::new(WINDOW_WIDTH, 40.),
         );
         let bottom_wall_collision = collide(
             ball_transform.translation,
             ball_size,
-            Vec3::new(0., COURT_HEIGHT * 0.5 + 20., 0.),
-            Vec2::new(COURT_WIDTH, 40.),
+            Vec3::new(0., WINDOW_HEIGHT * 0.5 + 20., 0.),
+            Vec2::new(WINDOW_WIDTH, 40.),
         );
         if top_wall_collision.is_some() || bottom_wall_collision.is_some() {
             ball_velocity.0.y = -ball_velocity.0.y;
@@ -299,14 +318,14 @@ fn process_collisions_system(
         let left_gutter_collision = collide(
             ball_transform.translation,
             ball_size,
-            Vec3::new(-COURT_WIDTH * 0.5 + 3., 0., 0.),
-            Vec2::new(26., COURT_HEIGHT),
+            Vec3::new(-WINDOW_WIDTH * 0.5 + 3., 0., 0.),
+            Vec2::new(26., WINDOW_HEIGHT),
         );
         let right_gutter_collision = collide(
             ball_transform.translation,
             ball_size,
-            Vec3::new(COURT_WIDTH * 0.5, 3., 0.),
-            Vec2::new(26., COURT_HEIGHT),
+            Vec3::new(WINDOW_WIDTH * 0.5, 3., 0.),
+            Vec2::new(26., WINDOW_HEIGHT),
         );
         if left_gutter_collision.is_some() {
             commands.entity(ball).despawn();
@@ -321,6 +340,7 @@ fn process_collisions_system(
             collision_events.send(CollisionEvent::Goal);
         }
 
+        // Iterate over other colliders (only paddles)
         for (transform, sprite) in collider_query.iter() {
             // Paddle (bounce)
             let collision = collide(
@@ -332,8 +352,9 @@ fn process_collisions_system(
 
             let mut bounce_off_paddle = || {
                 ball_velocity.0.x = -ball_velocity.0.x;
+                // Determine Y-velocity based on where on the paddle it hit
                 let dst_from_center = ball_transform.translation.y - transform.translation.y;
-                ball_velocity.0.y = dst_from_center * BOUNCE_ANGLE_STEEPNESS;
+                ball_velocity.0.y = dst_from_center * BOUNCE_ANGLE_MULTIPLIER;
                 collision_events.send(CollisionEvent::Bounce);
             };
 
@@ -350,7 +371,8 @@ fn process_collisions_system(
 }
 
 
-fn ball_spawn_system(
+/// Spawn the ball, alternating direction, based on fixed spawn timer
+fn ball_spawner(
     mut commands: Commands,
     time: Res<Time>,
     mut ball_spawn_timer: ResMut<BallSpawnTimer>,
@@ -384,7 +406,10 @@ fn ball_spawn_system(
 }
 
 
-fn opponent_controller_system(
+/// Very basic AI for opponent
+///  - If ball does not exist or is moving away from opponent, then stop
+///  - If ball is moving toward opponent, then set Y-velocity based on distance to ball on Y-axis
+fn opponent_controller(
     ball_query: Query<(&Transform, &Velocity), With<Ball>>,
     mut opponent_query: Query<(&Opponent, &Transform, &mut Velocity), Without<Ball>>,
 ) {
@@ -404,7 +429,8 @@ fn opponent_controller_system(
 }
 
 
-fn scoreboard_update_system(
+/// Update scoreboard text based on current score
+fn update_scoreboard(
     scoreboard: Res<Scoreboard>,
     mut score_query: Query<&mut Text, With<ScoreText>>,
 ) {
@@ -415,15 +441,16 @@ fn scoreboard_update_system(
 }
 
 
-fn collision_sound_system(
+/// Play appropriate collision sounds in response to collision events
+fn play_sounds(
     mut collision_events: EventReader<CollisionEvent>,
     audio: Res<Audio>,
-    collision_sound: Res<CollisionSound>,
+    hit_sound: Res<HitSound>,
     goal_sound: Res<GoalSound>,
 ) {
     for event in collision_events.iter() {
         match event {
-            CollisionEvent::Bounce => audio.play(collision_sound.0.clone()),
+            CollisionEvent::Bounce => audio.play(hit_sound.0.clone()),
             CollisionEvent::Goal => {
                 audio.play_with_settings(
                     goal_sound.0.clone(),
