@@ -278,13 +278,11 @@ fn process_collisions_system(
             Vec2::new(26., COURT_HEIGHT),
         );
         if left_gutter_collision.is_some() {
-            println!("Opponent scored!");
             commands.entity(ball).despawn();
             ball_spawn_timer.0.reset();
             scoreboard.opponent += 1;
         }
         if right_gutter_collision.is_some() {
-            println!("Player scored!");
             commands.entity(ball).despawn();
             ball_spawn_timer.0.reset();
             scoreboard.player += 1;
