@@ -32,6 +32,7 @@ fn main() {
         .insert_resource(PlayerTurn(true))
         .insert_resource(Scoreboard { player: 0, opponent: 0 })
         .insert_resource(BallSpawnTimer(Timer::from_seconds(0.5, false)))
+        .add_event::<CollisionEvent>()
         .add_startup_system(setup)
         .add_system(ball_spawn_system)
         .add_system(scoreboard_update_system)
@@ -47,7 +48,7 @@ fn main() {
                         .after(opponent_controller_system)
                         .after(apply_velocity_system)
                 )
-            // .with_system(play_collision_sound.after(check_for_collisions))
+                .with_system(collision_sound_system.after(process_collisions_system))
         )
         .run();
 }
@@ -89,8 +90,35 @@ struct Collider;
 struct ScoreText;
 
 
-fn setup(mut windows: ResMut<Windows>, mut commands: Commands, asset_server: Res<AssetServer>) {
+enum CollisionEvent {
+    Bounce,
+    Goal,
+}
+
+
+struct CollisionSound(Handle<AudioSource>);
+
+
+struct GoalSound(Handle<AudioSource>);
+
+
+fn setup(
+    mut windows: ResMut<Windows>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    audio: Res<Audio>,
+) {
     commands.spawn_bundle(OrthographicCameraBundle::new_2d());
+
+    // Sounds
+    audio.play_with_settings(
+        asset_server.load("sounds/Music.wav"),
+        PlaybackSettings::LOOP.with_volume(0.1),
+    );
+    let hit_sound = asset_server.load("sounds/PaddleHitSound.wav");
+    let goal_sound = asset_server.load("sounds/GoalSound.wav");
+    commands.insert_resource(CollisionSound(hit_sound));
+    commands.insert_resource(GoalSound(goal_sound));
 
     // Grab cursor
     let window = windows.get_primary_mut().unwrap();
@@ -242,6 +270,7 @@ fn process_collisions_system(
     collider_query: Query<(&Transform, &Sprite), With<Collider>>,
     mut ball_spawn_timer: ResMut<BallSpawnTimer>,
     mut scoreboard: ResMut<Scoreboard>,
+    mut collision_events: EventWriter<CollisionEvent>,
     mut commands: Commands,
 ) {
     if let Ok((ball, mut ball_velocity, ball_transform, ball_sprite)) = ball_query.get_single_mut() {
@@ -262,6 +291,7 @@ fn process_collisions_system(
         );
         if top_wall_collision.is_some() || bottom_wall_collision.is_some() {
             ball_velocity.0.y = -ball_velocity.0.y;
+            collision_events.send(CollisionEvent::Bounce);
         }
 
         // Gutters (goal)
@@ -281,11 +311,13 @@ fn process_collisions_system(
             commands.entity(ball).despawn();
             ball_spawn_timer.0.reset();
             scoreboard.opponent += 1;
+            collision_events.send(CollisionEvent::Goal);
         }
         if right_gutter_collision.is_some() {
             commands.entity(ball).despawn();
             ball_spawn_timer.0.reset();
             scoreboard.player += 1;
+            collision_events.send(CollisionEvent::Goal);
         }
 
         for (transform, sprite) in collider_query.iter() {
@@ -301,6 +333,7 @@ fn process_collisions_system(
                 ball_velocity.0.x = -ball_velocity.0.x;
                 let dst_from_center = ball_transform.translation.y - transform.translation.y;
                 ball_velocity.0.y = dst_from_center * BOUNCE_ANGLE_STEEPNESS;
+                collision_events.send(CollisionEvent::Bounce);
             };
 
             if let Some(collision) = collision {
@@ -378,4 +411,24 @@ fn scoreboard_update_system(
 
     score_text.sections[0].value = format!("{}", scoreboard.player);
     score_text.sections[2].value = format!("{}", scoreboard.opponent);
+}
+
+
+fn collision_sound_system(
+    mut collision_events: EventReader<CollisionEvent>,
+    audio: Res<Audio>,
+    collision_sound: Res<CollisionSound>,
+    goal_sound: Res<GoalSound>,
+) {
+    for event in collision_events.iter() {
+        match event {
+            CollisionEvent::Bounce => audio.play(collision_sound.0.clone()),
+            CollisionEvent::Goal => {
+                audio.play_with_settings(
+                    goal_sound.0.clone(),
+                    PlaybackSettings::ONCE.with_volume(0.4)
+                )
+            },
+        };
+    }
 }
