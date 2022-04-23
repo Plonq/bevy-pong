@@ -361,8 +361,8 @@ fn opponent_controller_system(
     if let Ok((ball_transform, ball_velocity)) = ball_query.get_single() {
         if ball_velocity.0.x > 0.0 {
             opponent_velocity.0.y = (
-                (ball_transform.translation.y - opponent_transform.translation.y) * 10.
-            ).clamp(-400., 400.);
+                (ball_transform.translation.y - opponent_transform.translation.y) * 13.
+            ).clamp(-450., 450.);
         } else {
             opponent_velocity.0.y = 0.;
         }
